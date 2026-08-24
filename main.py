@@ -1,3 +1,7 @@
+# In FastAPI, the code works in such a way that before the API function's code executes, the function's parameters are executed. 
+# If the parameters are also functions, then the parameter functions' code will execute first, and after that, the code inside the
+# API function will execute.
+
 from fastapi import FastAPI , Depends , HTTPException , status
 from sqlalchemy.orm import Session
 from models.userModels import User
@@ -6,8 +10,12 @@ import os
 from pydantic import BaseModel
 from schemas.loginSceham import LoginSchema
 from schemas.jwtSchema import jwtSchema
-from schemas.userSchema import user
+from schemas.userSchema import userSchema
 from utility.auth import create_access_token
+from utility.dependancies import get_current_admin
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=['bcrypt'] , deprecated='auto')
 
 # automatic create all models when write this line of code ok
 Base.metadata.create_all(bind=engine)
@@ -40,7 +48,10 @@ def login(request: LoginSchema , db: Session = Depends(get_db)):
             detail = 'Invalid Crediantials: User not found'
         )
 
-    if user.password != request.password:
+    # missing a step which is hashedpassword to unhashedpassword then match ok 
+
+
+    if not pwd_context.verify(request.password , user.password):
         raise HTTPException(
             status_code= status.HTTP_401_UNAUTHORIZED,
             detail='Invalid Credentials: Password incorrect'
@@ -63,6 +74,59 @@ def login(request: LoginSchema , db: Session = Depends(get_db)):
 
 
 # create user from admin
-@app.post('/api/createuser' , response_model=jwtSchema)
-def createUser(request: user ):
-    r=0
+# execute parameter function code before execute api function code
+@app.post('/api/createuser')
+def createUser(request: userSchema , db: Session = Depends(get_db) , admin_user: User = Depends(get_current_admin)):
+
+
+    # step1: check employeeId , email , username already exist are not in database
+    exist_user = db.query(User).filter(
+        (User.employee_id == request.employee_id) |
+        (User.email == request.email)| 
+        (User.username == request.username)
+    ).first()
+
+    if exist_user:
+        if exist_user.employee_id == request.employee_id:
+            msg = "Employee ID Already Exist."
+        elif exist_user.email == request.email:
+            msg = "Email Already Exist."
+        else:
+            msg = "Username Already Exist."
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=msg
+        )
+    # *****************************
+
+    # step2: change password to hashedPassword 
+    hashedPassword = pwd_context.hash(request.password)
+    # *********************
+
+    # step3: create new User model object then save object save in database 
+    newUser = User(
+        employee_id=request.employee_id,
+        full_name=request.username,
+        username=request.username,
+        email=request.email,
+        password=hashedPassword,
+        role=request.role,
+        designation=request.designation,
+        department=request.department,
+        status=request.status
+    )
+    # **************************
+
+
+    # step4: give User object in add function paramter then commit and refresh 
+    db.add(newUser)
+    db.commit()
+    db.refresh(newUser)
+
+    return {
+        "Message":"User Created Successfull.",
+        "employee_id":newUser.employee_id,
+        "username":newUser.username,
+        'role':newUser.role
+    }

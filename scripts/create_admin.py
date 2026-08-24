@@ -1,37 +1,49 @@
-# from database.database import engine, Base, sessionLocal
-from database.db import engine , Base , sessionLocal
+import sys
+import os
+
+# Current folder ke parent (Backend root) ko system path mein add karein
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+if PARENT_DIR not in sys.path:
+    sys.path.insert(0, PARENT_DIR)
+
+from database.db import engine, Base, sessionLocal
 from models.userModels import User
 from datetime import datetime, timezone
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def create_initial_admin():
-    # 1. Tables create karein agar abhi tak nahi bani hain
     Base.metadata.create_all(bind=engine)
-
-    # 2. Database Session start karein
     db = sessionLocal()
 
     try:
-        # Admin Details
         admin_username = "admin"
         admin_email = "admin@example.com"
         admin_emp_id = "EMP001"
+        plain_password = "admin123"
 
-        # 3. Check karein ki user pehle se exist karta hai ya nahi
-        existing_user = db.query(User).filter(
+        # Check karein aur purana admin delete karein
+        existing_users = db.query(User).filter(
             (User.username == admin_username) | (User.email == admin_email)
-        ).first()
+        ).all()
 
-        if existing_user:
-            print(f"⚠️ Admin user '{admin_username}' pehle se database me exist karta hai.")
-            return
+        if existing_users:
+            for old_user in existing_users:
+                db.delete(old_user)
+            db.commit()
+            print("🗑️ Purana admin user delete kar diya gaya.")
 
-        # 4. Naya Admin User object banayein
+        # Password hash karein
+        hashed_password = pwd_context.hash(plain_password)
+
         new_admin = User(
             employee_id=admin_emp_id,
             full_name="System Administrator",
             username=admin_username,
             email=admin_email,
-            password="adminpassword123",  # Apne hisab se password change kar lein
+            password=hashed_password,
             role="admin",
             designation="Super Admin",
             department="IT",
@@ -39,22 +51,21 @@ def create_initial_admin():
             created_at=datetime.now(timezone.utc)
         )
 
-        # 5. DB me insert aur commit karein
         db.add(new_admin)
         db.commit()
         db.refresh(new_admin)
 
         print("========================================")
-        print("✅ Admin User Successfully Created!")
+        print("✅ New Admin User Successfully Created!")
         print(f"👉 Username: {admin_username}")
-        print(f"👉 Password: adminpassword123")
+        print(f"👉 Password: {plain_password}")
         print(f"👉 Employee ID: {admin_emp_id}")
         print(f"👉 Role: {new_admin.role}")
         print("========================================")
 
     except Exception as e:
         db.rollback()
-        print(f"❌ Error creating admin user: {e}")
+        print(f"❌ Error resetting admin user: {e}")
 
     finally:
         db.close()
