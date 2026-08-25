@@ -2,18 +2,21 @@
 # If the parameters are also functions, then the parameter functions' code will execute first, and after that, the code inside the
 # API function will execute.
 
-from fastapi import FastAPI , Depends , HTTPException , status
+from fastapi import FastAPI , Depends , HTTPException , status , File , UploadFile
 from sqlalchemy.orm import Session
 from models.userModels import User
+import models.productionModels
 from database.db import engine , Base , get_db
 import os
+import base64
 from pydantic import BaseModel
 from schemas.loginSceham import LoginSchema
 from schemas.jwtSchema import jwtSchema
 from schemas.userSchema import userSchema
 from utility.auth import create_access_token
-from utility.dependancies import get_current_admin
+from utility.dependancies import get_current_admin , get_current_user
 from passlib.context import CryptContext
+from services.visionExtractor import run_vision_extractor
 
 pwd_context = CryptContext(schemes=['bcrypt'] , deprecated='auto')
 
@@ -129,4 +132,32 @@ def createUser(request: userSchema , db: Session = Depends(get_db) , admin_user:
         "employee_id":newUser.employee_id,
         "username":newUser.username,
         'role':newUser.role
+    }
+
+
+@app.post('/api/production/extractimage')
+async def extractFormData(file: UploadFile = File(...) , currentUser: User = Depends(get_current_user)):
+
+    # step1: File type validation
+    if file.content_type not in ['image/jpeg' , 'image/png' , 'image/jpg']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Only uplaod JPG/PNG Files.'
+        )
+
+    # step2: Read image content
+    imageBytes = await file.read()
+    try:
+        # Hugging Face function execution
+        extracted_json = run_vision_extractor(imageBytes, file.content_type)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Hugging Face Extraction Error: {str(e)}"
+        )
+
+    return {
+        "status": "success",
+        "message": "Form extracted successfully via Hugging Face model.",
+        "data": extracted_json
     }
