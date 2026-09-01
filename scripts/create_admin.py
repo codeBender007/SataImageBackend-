@@ -1,6 +1,10 @@
 import sys
 import os
 
+if sys.platform.startswith("win"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # Current folder ke parent (Backend root) ko system path mein add karein
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
@@ -24,7 +28,7 @@ def create_initial_admin():
         admin_emp_id = "EMP001"
         plain_password = "admin123"
 
-        # Check karein aur purana admin delete karein
+        # Check and delete existing admin user
         existing_users = db.query(User).filter(
             (User.username == admin_username) | (User.email == admin_email)
         ).all()
@@ -33,9 +37,9 @@ def create_initial_admin():
             for old_user in existing_users:
                 db.delete(old_user)
             db.commit()
-            print("🗑️ Purana admin user delete kar diya gaya.")
+            print("[INFO] Existing admin user deleted.")
 
-        # Password hash karein
+        # Password hash
         hashed_password = pwd_context.hash(plain_password)
 
         new_admin = User(
@@ -56,16 +60,16 @@ def create_initial_admin():
         db.refresh(new_admin)
 
         print("========================================")
-        print("✅ New Admin User Successfully Created!")
-        print(f"👉 Username: {admin_username}")
-        print(f"👉 Password: {plain_password}")
-        print(f"👉 Employee ID: {admin_emp_id}")
-        print(f"👉 Role: {new_admin.role}")
+        print("[SUCCESS] New Admin User Successfully Created!")
+        print(f"Username: {admin_username}")
+        print(f"Password: {plain_password}")
+        print(f"Employee ID: {admin_emp_id}")
+        print(f"Role: {new_admin.role}")
         print("========================================")
 
     except Exception as e:
         db.rollback()
-        print(f"❌ Error resetting admin user: {e}")
+        print(f"[ERROR] Error resetting admin user: {e}")
 
     finally:
         db.close()

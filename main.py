@@ -2,7 +2,7 @@
 # If the parameters are also functions, then the parameter functions' code will execute first, and after that, the code inside the
 # API function will execute.
 
-from fastapi import FastAPI , Depends , HTTPException , status , File , UploadFile ,Query
+from fastapi import FastAPI , Depends , HTTPException , status , File , UploadFile , Query , Path
 from typing import Optional
 from sqlalchemy.orm import Session
 from models.userModels import User
@@ -19,6 +19,9 @@ from utility.auth import create_access_token
 from utility.dependancies import get_current_admin , get_current_user
 from passlib.context import CryptContext
 from services.visionExtractor import run_vision_extractor
+from models.form2Models import Form2HandoverLog, Form2ToolRecord, Form2PDIInspectionRecord
+from routers.form2Router import router as form2_router
+from fastapi.middleware.cors import CORSMiddleware
 
 pwd_context = CryptContext(schemes=['bcrypt'] , deprecated='auto')
 
@@ -31,51 +34,68 @@ class LoginSchema(BaseModel):
     password: str
 
 
-app = FastAPI()
+app = FastAPI(
+    title="SATA Vikas Shop-Floor Digitization & OCR Backend",
+    version="1.0.0",
+    description="FastAPI Backend for Physical Form Extraction (Form A & Form 2 / Page B FOP Handover)"
+)
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include Form 2 (Page B - FOP & Shift Handover) Router
+app.include_router(form2_router)
+
 
 # base route
 @app.get('/')
 def firstApi():
     return {"message":"Welcome to FastAPI Backend!"}
 
-@app.post("/item/{item_id}")
-def secondApi(item_id: int , q: str = None):
-    return {"item_id : ":item_id , "query : ":q}
 
-@app.post('/api/login' , response_model=jwtSchema)
-def login(request: LoginSchema , db: Session = Depends(get_db)):
+@app.post('/api/login', response_model=jwtSchema)
+@app.post('/api/auth/login', response_model=jwtSchema)
+@app.post('/auth/login', response_model=jwtSchema)
+def login(request: LoginSchema, db: Session = Depends(get_db)):
 
     user = db.query(User).filter(User.username == request.username).first()
 
     if not user:
         raise HTTPException(
-            status_code = status.HTTP_404_NOT_FOUND,
-            detail = 'Invalid Crediantials: User not found'
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Invalid Credentials: User not found'
         )
 
-    # missing a step which is hashedpassword to unhashedpassword then match ok 
-
-
-    if not pwd_context.verify(request.password , user.password):
+    if not pwd_context.verify(request.password, user.password):
         raise HTTPException(
-            status_code= status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail='Invalid Credentials: Password incorrect'
         )
 
     token = {
-        'sub':user.username,
-        'employee_id':user.employee_id,
-        'role':user.role
+        'sub': user.username,
+        'employee_id': user.employee_id,
+        'role': user.role
     }
 
-    jwt_token = create_access_token(data = token)
+    jwt_token = create_access_token(data=token)
 
     return {
-        'access_token':jwt_token,
-        'token_type':'bearer',
-        'role':user.role,
-        'employee_id':user.employee_id
+        'access_token': jwt_token,
+        'token': jwt_token,
+        'token_type': 'bearer',
+        'role': user.role,
+        'employee_id': user.employee_id,
+        'username': user.username,
+        'fullName': user.full_name
     }
+
 
 
 # create user from admin
@@ -319,4 +339,86 @@ def get_form_a_list(
             detail=f"Failed to fetch Form A list: {str(e)}"
         )
 
-    
+
+
+@app.get("/api/form-a/{id}")
+def get_form_a_by_id(
+    id: int = Path(..., description="ID of the Form A record"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        # Step 1: Record search karein
+        log = db.query(ProductionLog).filter(ProductionLog.id == id).first()
+
+        if not log:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Form A with ID {id} not found"
+            )
+
+        # Step 2: Role-based Authorization check
+        # Agar normal user hai, toh sirf apna form dekh sakta hai
+        if current_user.role != "admin" and log.employeeNumber != current_user.employee_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: You are not authorized to view this form"
+            )
+
+        # Step 3: Hourly Entries unpack karein
+        hourly_data = []
+        for entry in log.hourlyEntries:
+            hourly_data.append({
+                "id": entry.id,
+                "part_number": entry.part_number,
+                "hour_slot": entry.hour_slot,
+                "uph": entry.uph,
+                "actual_production": entry.actual_production,
+                "casting_rejection": entry.casting_rejection,
+                "machining_rejection": entry.machining_rejection,
+                "unprocessed_rejection": entry.unprocessed_rejection
+            })
+
+        # Step 4: TPM Loss Entries unpack karein
+        tpm_data = []
+        for tpm in log.tpmEntries:
+            tpm_data.append({
+                "id": tpm.id,
+                "loss_category": tpm.loss_category,
+                "loss_reason": tpm.loss_reason,
+                "hour_slot": tpm.hour_slot,
+                "duration_minutes": tpm.duration_minutes
+            })
+
+        # Step 5: Full Nested Response Return Karein
+        return {
+            "status": "success",
+            "data": {
+                "id": log.id,
+                "logDate": log.logDate,
+                "shift": log.shift,
+                "opearationNumber": log.opearationNumber,
+                "machineNo": log.machineNo,
+                "qaCell": log.qaCell,
+                "employeeNumber": log.employeeNumber,
+                "supervisorName": log.supervisorName,
+                "shiftInchargeName": log.shiftInchargeName,
+                "pdiOkPart": log.pdiOkPart,
+                "pdiOkPart2": log.pdiOkPart2,
+                "entryPersonName": log.entryPersonName,
+                "abnormalityParts": log.abnormalityParts,
+                "otherAbnormality": log.otherAbnormality,
+                "imagePath": log.imagePath,
+                "createdAt": log.createdAt,
+                "hourlyEntries": hourly_data,
+                "tpmEntries": tpm_data
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching form details: {str(e)}"
+        )
